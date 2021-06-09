@@ -1,0 +1,61 @@
+/*
+ *  Author: 
+ *  Model Name: 
+ *  Status: DEVELOPMENTAL
+ *
+ *  Comments:
+ */
+
+theory first
+begin
+
+builtins: diffie-hellman
+
+
+rule create_identities :
+  let
+    pubkey = 'g'^~privkey
+  in
+    [ Fr(~privkey)  ]
+  -->
+    [!Identity($A, ~privkey, pubkey), Out(pubkey)  ]
+
+rule Client_hello :
+    [!Identity($client, ~clientprivkey, clientpubkey), !Identity($server, ~serverprivkey, serverpubkey)]
+   -->
+     [Out(<'Client_hello', $client, $server, clientpubkey>  )]
+
+rule recive_client_hello_send_server_hello:
+      
+         [!Identity($server, ~serverprivkey, serverpubkey), In(<'Client_hello', client, $server, clientpubkey>)  ]
+       --[ServerCreateSession($server, client, sessionkey)]->
+         [ Session($server, client, clientpubkey^serverprivkey), Out(<'server_hello', $server, client, serverpubkey>) ]
+
+rule recive_server_hello :
+      let
+        sessionkey = serverpubkey^~clientprivkey
+      in
+        [!Identity($client, ~clientprivkey, clientpubkey), In(<'server_hello', $server, client, serverpubkey>)  ]
+      --[ ClientCreateSession(client, server , sessionkey)  ]->
+        [ Session($client, server, sessionkey)  ]
+
+        
+
+        lemma MITM :
+
+
+        "
+            All client server sessionkey1 sessionkey2 #i #j .
+
+            (
+            	ClientCreateSession(client, server , sessionkey1) @ #i &
+            	ServerCreateSession(server,client, sessionkey2) @ #j &
+            	#j < #i &
+            	not (client = server)
+            	)
+            ==> not(Ex #k1 #k2 . K(sessionkey) @ #k1 & K(sessionkey2) @ #k2 )
+        "
+    
+       
+
+end
