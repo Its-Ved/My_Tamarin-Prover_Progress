@@ -2,6 +2,8 @@
  *  Author: 
  *  Model Name: Toy protocol
  *  Status: INCOMPLETE
+ * This is the toy_protocol exercise by benjaminkiesl (https://github.com/benjaminkiesl/tamarin_toy_protocol/blob/master/README.md)
+ *The protocol I wrote is incomplete.
  *
  *  Comments: A -> B : Na 
                B -> A : Nb
