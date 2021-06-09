@@ -1,2 +1,5 @@
 # My_Tamarin-Prover_Progress
-//It's my first very basic Tamarin-Prover code. It's about Diffie-hellman without static public keys
+
+
+Hi, I'm new to Tamarin-Prover and I'll be uploding my tamarin codes here that I write during my learning process. 
+
