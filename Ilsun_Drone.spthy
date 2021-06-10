@@ -1,0 +1,120 @@
+/*  Author: Ved
+ *  
+ *  Status: INCOMPLETE
+ *
+ *  About: This is the protocol mentioned in " Drone Secure Communication Protocol for Future Sensitive
+ *  Applications in Military Zone"
+ */
+
+
+
+
+
+theory Drone_Protocol_Ilsun
+
+begin
+
+  // bilinear-pairing *should* model elliptic curve cryptography, but I've never used it actually!
+  // signing models a non-revealing signing schema (e.g. signing with RSA private key, verificating it with the corresponding public key)
+  builtins: bilinear-pairing, signing
+  
+  // HMAC is not builtin into Tamarin, define it 
+  functions: hmac/2, verify_hmac/3
+  equations: verify_hmac(hmac(m, k), m, k) = true
+
+/* Register a new signing key and bind it to an agent */
+  rule RegisterSigningKey:
+      [ Fr(~sign_key) ] // Fresh signing key
+    -->
+      [
+        // These two facts are persistent (can be consumed indefinitly), which makes sense as we are modeling long term keys
+        // Notice that we need to bind the keys to the agent X, which is chosen when instantiating the rule
+        !Ltsk($X, ~sign_key),    // Stands for "LongTermSigningKey"
+        !Psk($X, pk(~sign_key)), // Public Signing Key (e.g. verification key)
+        Out(pk(~sign_key))       // Make sure the attacker knows the verification key
+      ]
+
+/* Generate a digital certificate */
+// Disclaimer: I'm not quite sure this works correctly!
+  rule GenerateCertificate:
+      [
+        !Ltsk($AUTHORITY, skey_auth), // Recover CA signing key 
+        !Psk($X, verification_key)    // and the data to sign (identity of $X and his public key) 
+      ]
+    -->
+      // Generate the certificate of $X binding its name and
+      [ !CERT($X, sign(<$X, verification_key>, skey_auth)) ]
+
+/**************************/
+/* Protocol specification */
+/**************************/
+
+  rule InitGCS:
+      [ Fr(~P) ]
+    -->
+      [ GCSState($GCS, 'INIT', <~P>), Out(~P) ]
+
+  rule Drone_1:
+    // Use let binding for improved readability 
+    let
+      Qd = pmult('G', ~dp) // 'G' is a public constant, known to the attacker
+      M1 = <IDm, cert, Qd, ~ts1>
+      S1 = sign(M1, skey)
+      HM = hmac(<M1, S1>, P) // Compute HMAC
+    in
+      [ 
+        // Mission ID and user key
+        // this assumes that the user sends his HMAC key to the network, might be wrong (if not, it's weird)
+        In(<IDm, P>),
+       
+        // Secret parameter of Elliptic Curve
+        Fr(~dp),
+
+        // I'm not quite sure about how to model timestamps. 
+        //  I don't know how to deal with this
+        Fr(~ts1),
+
+        // Get the drone signing key. Drone is identified by the public name $D
+        !Ltsk($D, skey),
+        
+        // Certificate of the Drone
+        !CERT($D, cert)
+      ] 
+    --[ DroneStartProtocol($D, IDm, P) ]-> // Record the start of the protocol (Idm and P should be enough to identify the single session) 
+      [ 
+        // Send out the message to the other party
+        Out(<IDm, cert, Qd, ~ts1, HM>),
+        
+        // Save as much data as possible into the state of the drone
+        DroneState($D, 'DRONE_START', <IDm, P, ~dp, ~ts1>) // cert (for example) is not here as we can recover it from !CERT(...) if needed in future steps
+      ]
+
+  rule GCS_1:
+      [ 
+        
+        In(<IDm, certD, Qd, ts1, HM>)
+
+        // TODO
+      ]
+    -->
+      [ 
+        //TODO
+      ]
+
+  rule Drone_2:
+      
+      [ DroneState($D, 'DRONE_START', <IDm, P, ~dp, ~ts1>) ]
+    -->
+      []
+
+
+  /***********************/
+  /* Security properties */
+  /***********************/
+  
+  lemma dummy_executable:
+    exists-trace
+    
+    "∃ D IDm P #i. DroneStartProtocol(D, IDm, P) @ i"
+
+end
