@@ -1,0 +1,91 @@
+/*
+ * Protocol based on: https://github.com/benjaminkiesl/tamarin_toy_protocol
+ *
+ *      A -> B: Na
+ *      B -> A: Nb
+ *      A -> B: 'ACK'  (A also computes a Session Key derived from the two nonces and goes to a DONE state)
+ *      After the 'ACK', B computes the SK and goes to a DONE state
+ */
+
+theory Toy_1
+begin
+
+builtins: symmetric-encryption
+functions: KDF/1
+
+
+//rules
+
+rule Create_Identities:
+  
+    [ Fr(~aID), Fr(~bID) ]
+  --[ Init(~MK, ~aID, ~bID) ]->
+    [ AIdent(~aID,'INIT', '~MK'), BIdent(~bID,'INIT', '~MK') ]
+
+rule A:
+  
+    [AIdent(~aID,'INIT', '~MK'), Fr(~Na)  ]
+  --[  ASendsNonce(~aID, ~MK, ~Na) ]->
+    [ Out(~Na),  AIdent(~aID,'SENT_NONCE', <~MK, ~Na>   ]
+rule B:
+  
+    [BIdent(~bID,'INIT', 'NIL'), In(Na), Fr(~Nb)  ]
+  --[ BReceivesNonceSendsNonce(~bID, ~MK, Na, ~Nb) ]->
+    [ Out(~Nb), BIdent(~bID,'SENT_NONCE', <~MK,Na, ~Nb>) ]
+
+rule A1:
+  let
+    Ks= KDF(~Na,Nb)
+  in
+    [ AIdent(~aID,'SENT_NONCE', <~MK,~Na>), In(Nb) ]
+  --[  AInstallsKey(~aID,~MK, ~Na, Nb, Ks) ]->
+    [ Out('ACK'), AIdent(~aID, 'INSTALLED_KEY', <~MK,~Na, Nb, Ks>) ]
+
+rule B1:
+  let
+    Ks= KDF(~Na,Nb)
+  in
+    [ BIdent(~bID,'SENT_NONCE', <Na, ~Nb>), In('ACK')  ]
+  --[ c ]->
+    [  BIdent(~bID, 'INSTALLED_KEY', <~MK,Na, ~Nb, Ks>) ]
+
+
+
+
+/*******************/
+/* Security lemmas */
+/*******************/
+
+
+
+
+lemma execute:
+    exists-trace
+    "
+    Ex idA idB Na Nb Ks #i #j. 
+    AInstallsKey(idA, Na, Nb, Ks) @i &
+     BInstallsKey(idB, Na, Nb, Ks) @j"
+
+
+lemma Ks_Secret:
+
+ "All aID Na Nb Ks #i.
+     AInstallsKey (idA, Na, Nb, Ks) @i ==> not(Ex #j. K(Ks) @j)"
+
+
+
+lemma ks_Secret_b:
+"All aID Na Nb Ks #i. 
+        BInstallsKey(bID, Na, Nb, Ks) @ i 
+            ==> not(Ex #j. K(Ks) @ j)"
+
+
+lemma If_B_finishes_A_will_also_finish:
+            "All bID MK Na Nb Ks #idA
+            BInstallsKey(bID,MK, Na, Nb, Ks)@i
+            ==> (Ex aID #j. AInstallsKey(aID, MK,Na,Nb,Ks)@j
+              & j<i)
+
+                
+            "            
+end
