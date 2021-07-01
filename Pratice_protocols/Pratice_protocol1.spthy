@@ -1,0 +1,108 @@
+theory Project1
+begin
+
+builtins: asymmetric-encryption
+
+// Registering a public key
+rule Register_pk:
+    [ Fr(~ltk) ]
+  -->
+    [ !Ltk($A, ~ltk), !Pk($A, pk(~ltk))]
+
+rule Get_pk:
+    [ !Pk(A, pubkey) ]
+  -->
+    [ Out(pubkey) ]
+
+rule Reveal_ltk:
+    [ !Ltk(A, ltk) ]
+  --[ LtkReveal(A) ]->
+    [ Out(ltk) ]
+
+rule A_1:
+    [ Fr(~na)
+    , !Pk(A, pkA)
+    , !Pk(B, pkB)
+    ]
+  -->
+    [ A1( A, B, ~na, pkA)
+    , Out(<A,aenc(~na, pkB)>)
+    ]
+
+rule B_1:
+    [ !Ltk(B, ltkB)
+    , In( request )
+    , !Pk(fst(request), pkA)
+    ]
+  --[ Answer(fst(request), B, adec(snd(request), ltkB)) ]->
+    [ Out(<B,aenc(adec(snd(request), ltkB), pkA)>) ]
+
+rule A_2:
+    [ A1(A, B, na, pkA)
+    , In(<B, aenc(na, pkA)>)
+    ]
+  --[ Session(A, B, na) ]->
+    []
+
+lemma Protocol_honest_run:
+  exists-trace
+  " Ex A B na #i.
+        Session(A, B, na) @ #i
+      & not(Ex #j. LtkReveal(A) @ j)
+      & not(Ex #k. LtkReveal(B) @ k)
+  "
+
+
+lemma Secrecy:
+  "
+       All A B na #i.
+         (Session(A, B, na) @ i) & not(A=B) & not(Ex #k. LtkReveal(A) @ #k) & not(Ex #l. LtkReveal(B) @ #l) 
+        ==>
+         not(Ex #j. K(na) @ j)
+       
+  "
+
+/*
+
+lemma Secrecy:
+  "
+       All A B na #i.
+         (Session(A, B, na) @ i) & (Ex #j. K(na) @ j) 
+        ==>
+         ((Ex #k. LtkReveal(A) @ #k) | (Ex #l. LtkReveal(B) @ #l))
+       
+  "
+
+
+lemma Secrecy:
+  exists-trace
+  " not(Ex A B na #i.
+	(
+        Session(A, B, na) @ #i 
+	& Ex #l. K(na) @ l 
+        & not(Ex #j. LtkReveal(A) @ j)
+	& not(Ex #k. LtkReveal(B) @ k )
+	)
+       )
+  "
+*/
+
+lemma Authentication:
+ "
+  ( All A B na #i. ((Session(A, B, na) @ #i) & not(A = B))
+    ==>
+    Ex #a. Answer(A, B, na) @ a
+  )
+ "
+
+
+lemma Session_Injective:
+ "
+  ( All A B na #i. (Session(A, B, na) @ #i)
+    ==>
+    All #j. Session(A, B, na) @ #j ==> #i = #j
+  )
+ "
+
+end
+
