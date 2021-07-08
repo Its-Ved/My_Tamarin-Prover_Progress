@@ -1,0 +1,1414 @@
+theory 5G_aka_full
+	
+/*    Comments: this protocol has added lemmas and action points same as the original one
+
+			
+	   Protocol:	1. UE   -> SEAF:	suci
+			2. SEAF -> AUSF:	suci, SNID
+			3. AUSF -> ARPF:	suci, SNID
+			4. ARPF -> AUSF:	RAND, XRES*, K_ausf, AUTN, supi
+			5. AUSF -> SEAF:	RAND, HXRES*, K_seaf, AUTN
+			6. SEAF -> UE  :	RAND, AUTN
+			7. UE   -> SEAF:	RES*
+			8. SEAF -> AUSF:	RES*, suci, SNID
+			9. AUSF -> SEAF:	'confirm', supi
+	
+
+	   Protocol	1. UE   -> SEAF:	suci
+	   Model:	2. SEAF -> HSS:		suci, SNID
+			3. HSS -> SEAF:		RAND, HXRES*, K_seaf, AUTN
+			4. SEAF -> UE  :	RAND, AUTN
+			5. UE   -> SEAF:	RES*
+		  	6. SEAF -> HSS:		RES*, suci, SNID
+			7. HSS -> SEAF:		'confirm', supi
+	*/
+	
+
+	begin
+	
+
+	builtins:
+		asymmetric-encryption, multiset, xor
+	
+
+	functions:
+		// AKA functions (TS 33.102)
+		f1/2, 	   // MAC
+		f2/2, 	   //  RES
+		f3/2, 	   // KDF 	  CK
+		f4/2, 	   // KDF     IK
+		f5/2, 	   // KDF     AK
+		f5_star/2, // KGF	   --> AKS (Hide Sqn)
+	
+
+		
+		KDF/2,	 // 		 --> K_ausf, K_seaf, XRES*
+		SHA256/2 // 		 --> HXRES*
+	
+
+	
+
+	/************************************/
+	/*    Channel: SEAF .<->. HSS       */
+	/************************************/
+	
+	rule send_secure:
+		[SndS(A,B,m)]
+		-->
+		[Sec(A,B,m)]
+	
+
+	rule receive_secure:
+		[Sec(A,B,m)]
+		-->
+		[RcvS(A,B,m)]
+	
+
+	rule secureChannel_compromised_in:
+		[In(<A,B,x>)]
+		--[
+			Rev(A,'secureChannel'),
+			Injected(x)
+		]->
+		[Sec(A,B,x)]
+	
+
+	rule secureChannel_compromised_out:
+		[Sec(A,B,m)]
+		--[Rev(B,'secureChannel')]->
+		[Out(m)]
+	
+
+	
+
+	
+	rule init_servNet:
+		let 
+			SNID = <'5G', ~SNid>
+		in
+		[ Fr(~SNid) ] // SNid denotes VPLMNID
+		--[ ServNet(~SNid) ]->
+		[!SEAF(~SNid, SNID)
+		, Out(SNID)]
+	
+
+	
+	rule init_homeNet:
+		[Fr(~seck_HN),
+		  Fr(~HNid)]
+		--[ HomeNet(~HNid) ]->
+		[!HSS(~HNid, ~seck_HN),
+		 !Pk(~HNid, pk(~seck_HN)),
+		 Out(<~HNid, pk(~seck_HN)>)]
+	
+
+	rule add_subscription:
+		[Fr(~supi),
+		 Fr(~k),
+		 Fr(~sqn_root),
+		 !HSS(~HNid, ~seck_HN)]
+		--[
+			
+			Subscribe(~supi, ~HNid),
+	
+
+			
+			Sqn_Create(~supi, ~HNid, ~sqn_root)
+		]->
+		[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+		 Sqn_UE(~supi, ~HNid, ~sqn_root+'1', ~sqn_root, '1'),
+		 Sqn_HSS(~supi, ~HNid, ~sqn_root+'1', ~sqn_root, '1')]
+	
+
+	
+
+	
+	rule reveal_Ltk_Sym:
+		[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+		--[
+			
+			Rev(~supi, <'k', ~k>),
+			Rev(~HNid, <'k', ~k>)
+		]->
+		[Out(~k)]
+	
+
+	
+	rule reveal_Ltk_Sqn:
+		[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+		--[
+			
+			Rev(~supi, <'sqn', ~sqn_root>),
+			Rev(~HNid, <'sqn', ~sqn_root>)
+		]->
+		[Out(~sqn_root)]
+	
+
+	
+	rule reveal_Ltk_supi:
+		[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+		--[
+			
+			Rev(~supi, <'supi', ~supi>),
+			Rev(~HNid, <'supi', ~supi>)
+		]->
+		[Out(~supi)]
+	
+
+	
+	rule reveal_seck_HN:
+		[!HSS(~HNid, ~seck_HN)]
+		--[
+		
+			Rev(~HNid, <'skHN', ~seck_HN>)
+		]->
+		[Out(~seck_HN)]
+	
+
+	
+
+	
+	rule ue_sqn_increase:
+		[Sqn_UE(~supi, ~HNid, Sqn, ~sqn_root, count),
+		 In(m)]
+		--[
+			
+			Sqn_UE_Invariance(~supi, ~HNid, Sqn+m, ~sqn_root, count+m),
+	
+
+			
+			Sqn_UE_Change(~supi, ~HNid, Sqn+m),
+	
+
+			
+			Sqn_UE_Desync()
+		]->
+		[Sqn_UE(~supi, ~HNid, Sqn+m, ~sqn_root, count+m)]
+	
+
+	
+
+	
+	rule ue_send_attachReq:
+		let
+			suci = < aenc{<~supi, ~R>}pk_HN, ~HNid>
+			msg = suci
+		in
+		[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+		 !Pk(~HNid, pk_HN),
+		 Fr(~R),
+		 Fr(~tid)]
+		--[
+			
+			Start_UE_Session(~supi)
+		]->
+		[St_1_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root),
+		 Out(msg)]
+	
+
+	
+	rule seaf_receive_attachReq_send_air:
+		let
+			suci = <conc_supi,  HNid>
+			msg = <suci, SNID >
+	
+
+		in
+		[!SEAF(~SNid, SNID),
+		 Fr(~tid),
+		 In(suci)]
+		--[
+			// Executability
+			Start_SEAF_Session(~SNid)
+		]->
+		[St_1_SEAF(~tid, ~SNid, SNID, conc_supi, HNid),
+		 SndS(~SNid, HNid, <'air', msg>)]
+	
+
+	
+	rule hss_receive_air_send_aia:
+		let
+		        // 1. Receive
+			conc_supi = aenc{<~supi, ~R>}pk(~seck_HN)
+			suci = <conc_supi, ~HNid>
+			SNID = <'5G', SNid> // HSS checks that the received SNID matches the authenticated channel with SNid
+			msgIn = <suci, SNID >
+			SqnNext = SqnHSS + '1'
+			
+			// 2. Send
+	                //     a. ARPF part
+			MAC = f1(~k, <SqnNext, ~RAND>)
+		 	XRES = f2(~k, ~RAND)
+			CK = f3(~k, ~RAND)
+			IK = f4(~k, ~RAND)
+			AK = f5(~k, ~RAND)
+			AUTN = <SqnNext XOR AK, MAC>
+			K_seaf = KDF(KDF(<CK, IK>, <SNID, SqnNext XOR AK>), SNID)
+			XRES_star = KDF(<CK, IK>, <SNID, XRES, ~RAND>)
+	
+
+			//     b. AUSF part
+	                HXRES_star = SHA256(XRES_star, ~RAND)
+			5G_AV = < ~RAND, HXRES_star, K_seaf, AUTN >
+	
+
+			msgOut = 5G_AV
+	        in
+		[!HSS(~HNid, ~seck_HN),
+		 RcvS(SNid, ~HNid, <'air', msgIn>),
+		 !Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+		 Sqn_HSS(~supi, ~HNid, SqnHSS, ~sqn_root, count),
+		 Fr(~RAND),
+		 Fr(~tid),
+		 In(count)]
+		--[
+			
+			Sqn_HSS_Invariance(~HNid, ~supi, SqnNext, ~sqn_root, count+'1'),
+			Src(~RAND, AUTN),
+	
+
+			
+			Start_HSS_Session(~HNid),
+			HSS_Send_Aia(),
+	
+
+			
+			Running(~HNid, SNid,<'SEAF','HSS',<'K_seaf', K_seaf>>),
+			Running(~HNid, SNid,<'SEAF','HSS',<'supi', ~supi>>),
+			Running(~HNid, SNid,<'SEAF','HSS',<'RES_star', XRES_star>>),
+			Running(~HNid, ~supi,<'UE','HSS', <'K_seaf', K_seaf>>),
+			Running(~HNid, ~supi,<'UE','HSS', <'snname', SNid>>),
+			Running(~HNid, ~supi,<'UE','HSS',<'supi', ~supi>>),
+			Running(~HNid, ~supi,<'UE','HSS',<'AUTN', AUTN>>),
+			Honest(~supi),
+			Honest(~HNid),
+			Honest(SNid)
+		]->
+		[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, SqnNext, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+	         Sqn_HSS(~supi, ~HNid, SqnNext, ~sqn_root, count+'1'),
+	         SndS(~HNid, SNid, <'aia', msgOut>)]
+	
+
+	
+
+	
+	rule seaf_receive_aia_send_authReq:
+		let
+			5G_AV = < RAND, HXRES_star, K_seaf, AUTN >
+			msgIn = 5G_AV
+	                msgOut = < RAND, AUTN, SNID >
+	        in
+		[St_1_SEAF(~tid, ~SNid, SNID, conc_supi, HNid),
+		 RcvS(HNid, ~SNid, <'aia', msgIn>)]
+		--[
+			
+			Out_Src(RAND, AUTN),
+	
+
+	                
+			Running(~SNid, HNid, <'HSS','SEAF', <'K_seaf', K_seaf>>)
+		]->
+		[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf)
+		, Out(msgOut)]
+	
+
+	
+
+	
+	rule ue_receive_authReq_freshness_success_send_authResp:
+		let
+			
+			SqnHSS = SqnUE + dif 
+			AK = f5(~k, RAND)
+			MAC = f1(~k, <SqnHSS, RAND>) 
+	                AUTN = <SqnHSS XOR AK, MAC>
+			SNID = <'5G', SNid>
+			msgIn = < RAND, AUTN, SNID >
+			// Output
+			RES = f2(~k, RAND)
+			IK = f4(~k, RAND)
+			CK = f3(~k, RAND)
+			RES_star = KDF(<CK, IK>, <SNID, RES, RAND>)
+			K_seaf = KDF(KDF(<CK, IK>, <SNID, SqnHSS XOR AK>), SNID)
+			msgOut = RES_star
+		in
+		[St_1_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root),
+		 Sqn_UE(~supi, ~HNid, SqnUE, ~sqn_root, count),
+		 In(msgIn)]
+		--[
+			
+			Sqn_UE_Invariance(~supi, ~HNid, SqnHSS, ~sqn_root, count+dif),
+	
+
+			Sqn_UE_Change(~supi, ~HNid, SqnHSS),
+			Sqn_UE_Use(~supi, ~HNid, SqnHSS),
+	
+
+			Running(~supi, SNid,<'SEAF','UE',<'RES_star', RES_star>>),
+			Running(~supi, SNid,<'SEAF','UE',<'K_seaf', K_seaf>>),
+			Running(~supi, SNid,<'SEAF','UE',<'supi', ~supi>>),
+			Running(~supi, ~HNid, <'HSS','UE', <'K_seaf', K_seaf>>),
+			Running(~supi, ~HNid, <'HSS','UE', <'snname', SNid>>),
+			Running(~supi, ~HNid, <'HSS','UE', <'supi', ~supi>>),
+			Running(~supi, ~HNid, <'HSS','UE', <'RAND', RAND>>),
+			Secret(<'UE', ~supi>, 'key', K_seaf),
+			Secret(<'UE', ~supi>, 'supi', ~supi),
+			Secret(<'UE', ~supi>, 'k', ~k),
+			Commit(~supi, ~HNid, <'UE','HSS',<'AUTN', AUTN>>),
+			Commit(~supi, ~HNid, <'UE','HSS',<'supi', ~supi>>),
+			Commit(~supi, ~HNid, <'UE','HSS', <'snname', SNid>>),
+			Commit(~supi, ~HNid, <'UE','HSS', <'K_seaf', K_seaf>>),
+			Commit(~supi, SNid, <'UE','SEAF',<'K_seaf', K_seaf>>),
+			Commit(~supi, SNid, <'UE','SEAF',<'RAND', RAND>>),
+			Honest(~supi),
+			Honest(~HNid),
+			Honest(SNid)		
+		]->
+		[St_2_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root, SNid, K_seaf),
+		 Out(msgOut),
+		 Sqn_UE(~supi, ~HNid, SqnHSS, ~sqn_root, count+dif)]
+	
+
+	
+
+	
+	rule ue_receive_authReq_fail_freshness_send_sync_failure:
+		let
+			// Input, checks
+			AK = f5(~k, RAND)
+			MAC = f1(~k, <SqnHSS, RAND>) // check on the MAC
+	                AUTN = <SqnHSS XOR AK, MAC>
+			SNID = <'5G', SNid>
+			msgIn = < RAND, AUTN, SNID >
+			// Output
+			AKS = f5_star(~k, RAND)
+			MACS = f1_star(~k, <SqnUE, RAND>)
+			AUTS = <SqnUE XOR AKS, MACS >
+			out_msg = AUTS
+		in
+		[St_1_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root),
+		 Sqn_UE(~supi, ~HNid, SqnUE, ~sqn_root, count),
+		 In(msgIn),
+		 In(count)]		
+		--[
+			
+			Greater_Or_Equal_Than(SqnUE, SqnHSS), 
+	
+
+			
+	                Sqn_UE_Invariance(~supi, ~HNid, SqnUE, ~sqn_root, count),
+	
+
+		      
+			Sqn_UE_Nochange(~supi, ~HNid, SqnUE)
+		]->
+		[Out(out_msg),
+		 Sqn_UE(~supi, ~HNid, SqnUE, ~sqn_root, count)]
+	
+
+	
+	rule seaf_receive_authResp_send_ac:
+		let
+			HXRES_star = SHA256(RES_star, RAND)
+			suci = <conc_supi,  HNid>
+			msgOut = < RES_star, suci, SNID >
+		in
+		[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf),
+		 In(RES_star)]
+		--[
+			
+			Running(~SNid, HNid, <'HSS','SEAF', <'RES_star', RES_star>>)
+		]->
+		[St_3_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, RES_star, K_seaf),
+		SndS(~SNid, HNid, <'ac', msgOut>)]
+	
+
+	
+
+	
+	rule seaf_receive_syncFailure_send_authSync:
+		let
+			AUTS = < SqnUEXorAKS, MACS >
+			out_msg = < RAND, AUTS >
+		in
+		[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf),
+		 In(AUTS)]
+		-->
+		[SndS(~SNid, HNid, <'resync', out_msg>)]
+	
+
+	
+	rule hss_receive_ac_send_aca:
+		let
+			SNID = <'5G', SNid>
+			CK = f3(~k, ~RAND)
+			IK = f4(~k, ~RAND)
+			AK = f5(~k, ~RAND)
+			K_seaf = KDF(KDF(<CK, IK>, <SNID, Sqn XOR AK>), SNID)
+			msgIn = < XRES_star, suci, SNID >
+	
+
+			msgOut = <'confirm', ~supi>
+		in
+		[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, Sqn, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+		 RcvS(SNid, ~HNid, <'ac',msgIn>)]
+		--[
+			
+			HSS_End(),
+	
+
+			
+			Secret(<'HSS', ~HNid>, 'key', K_seaf),
+			Secret(<'HSS', ~HNid>, 'supi', ~supi),
+			Secret(<'HSS', ~HNid>, 'k', ~k),
+			Commit(~HNid, SNid, <'HSS','SEAF', <'K_seaf', K_seaf>>),
+			Commit(~HNid, SNid, <'HSS','SEAF', <'supi', ~supi>>),
+			Commit(~HNid, SNid, <'HSS','SEAF', <'RES_star', XRES_star>>),
+			Commit(~HNid, ~supi, <'HSS','UE', <'K_seaf', K_seaf>>),
+			Commit(~HNid, ~supi, <'HSS','UE', <'snname', SNid>>),
+			Commit(~HNid, ~supi, <'HSS','UE', <'supi', ~supi>>),
+			Commit(~HNid, ~supi, <'HSS','UE', <'RAND', ~RAND>>),
+			Honest(~HNid),
+			Honest(~supi),
+			Honest(SNid)
+		]->
+		[SndS(~HNid, SNid, <'aca', msgOut>)]
+	
+
+	
+	rule seaf_receive_aca:
+	        let
+			SNID = <'5G', ~SNid>
+			msgIn = <'confirm', supi>
+		in
+	        [St_3_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf),
+		 RcvS(HNid, ~SNid, <'aca', msgIn>)]
+		--[
+			
+			SEAF_End(),
+	
+
+			
+			Running(~SNid, supi,<'UE','SEAF',<'K_seaf', K_seaf>>),
+			Running(~SNid, HNid,<'HSS','SEAF',<'supi', supi>>),
+			Secret(<'SEAF', ~SNid>, 'key', K_seaf),
+			Secret(<'SEAF', ~SNid>, 'supi', supi),
+			Commit(~SNid, HNid, <'SEAF','HSS', <'K_seaf', K_seaf>>),
+			Commit(~SNid, HNid, <'SEAF','HSS', <'supi', supi>>),
+			Commit(~SNid, HNid, <'SEAF','HSS', <'RES_star', RES_star>>),
+			Commit(~SNid, supi, <'SEAF','UE', <'K_seaf', K_seaf>>),
+			Commit(~SNid, supi, <'SEAF','UE', <'supi', supi>>),
+			Commit(~SNid, supi, <'SEAF','UE', <'RES_star', RES_star>>),
+			Honest(supi),
+			Honest(HNid),
+			Honest(~SNid)
+		]->
+		[St_4_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf,supi),
+		 Out(f1(K_seaf, 'SEAF'))]
+	
+
+	rule hss_receive_authSync:
+		let
+			SqnUE = dif + SqnHSS 
+			AKS = f5_star(~k, ~RAND)
+			MACS = f1_star(~k, <SqnUE, ~RAND>)
+			AUTS = <SqnUE XOR AKS, MACS >
+			msg = < ~RAND, AUTS >
+	
+
+		in
+		[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, SqnHSS, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+		 Sqn_HSS(~supi, ~HNid, SqnHSS, ~sqn_root, count),
+		 RcvS(SNid, ~HNid, <'resync', msg>),
+		 In(count+dif)]
+		--[
+			
+			Sqn_HSS_Invariance(~HNid, ~supi, SqnUE, ~sqn_root, count+dif),
+	
+
+			
+			HSS_Resync_End(count+dif)
+		]->
+		[Sqn_HSS(~supi, ~HNid, SqnUE, ~sqn_root, count+dif)]
+	
+
+	
+	rule ue_key_confirmation:
+	        [St_2_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root, SNid, K_seaf),
+		 In(f1(K_seaf, 'SEAF'))]
+	        --[
+			// Security properties (after key confirmation)
+		        CommitConf(~supi, ~HNid, <'UE','HSS', <'K_seaf', K_seaf>>),
+		        CommitConf(~supi, ~HNid, <'UE','HSS', <'snname', SNid>>),
+		        CommitConf(~supi, ~HNid, <'UE','HSS', <'supi', ~supi>>),
+			CommitConf(~supi, SNid, <'UE','SEAF',<'K_seaf', K_seaf>>),
+			SecretConf(<'UE', ~supi>, 'supi', ~supi),
+			Honest(~supi),
+			Honest(~HNid),
+			Honest(SNid)		
+		]->
+		[Out(f1(K_seaf, 'UE'))]
+	
+
+	rule seaf_key_confirmation_check:
+	       	[St_4_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf,supi),
+		 In(f1(K_seaf, 'UE'))]
+	        --[
+			// Security properties
+			CommitConf(~SNid, HNid, <'SEAF','HSS', <'K_seaf', K_seaf>>),
+			CommitConf(~SNid, HNid, <'SEAF','HSS', <'supi', supi>>),
+			CommitConf(~SNid, supi, <'SEAF','UE', <'K_seaf', K_seaf>>),
+			CommitConf(~SNid, supi, <'SEAF','UE', <'supi', supi>>),
+			Honest(supi),
+			Honest(HNid),
+			Honest(~SNid),
+			SEAF_EndConf()
+		]->
+		[]
+	
+
+	
+
+	
+	
+
+	restriction subscribe_once:
+		" All HN1 HN2 supi #i #j. Subscribe(supi, HN1)@i & Subscribe(supi, HN2)@j ==> (#i = #j & HN1 = HN2)"
+	
+
+	restriction greater_or_equal_than:
+	  	" All x y #i. Greater_Or_Equal_Than(x,y)@i ==> not (Ex z. x + z = y) "
+	
+
+	// Dummy lemma for timing info only.
+	lemma dummy: "not(F)"
+	
+
+	/************************************/
+	/*         Sources lemmas           */
+	/************************************/
+	
+
+
+	lemma rand_autn_src [sources]:
+	  	" All RAND AUTN #i. Out_Src(RAND, AUTN)@i
+			==> (Ex #j. Src(RAND, AUTN)@j & j < i)
+			    | (Ex #j x1 x2. Injected(<'aia', <RAND, x1, x2, AUTN>>)@j & j < i) "
+	
+
+	
+
+
+	lemma sqn_ue_invariance [use_induction, sources]:
+		" All supi HN Sqn sqn_root count #i.
+			Sqn_UE_Invariance(supi, HN, Sqn, sqn_root, count)@i
+				==> sqn_root + count = Sqn"
+	
+
+	
+	lemma sqn_hss_invariance [use_induction, sources]:
+		" All HN supi Sqn sqn_root count #i.
+			Sqn_HSS_Invariance(HN, supi, Sqn, sqn_root, count)@i
+				==> sqn_root + count = Sqn "
+	
+
+	
+	lemma sqn_ue_src [use_induction, reuse]:
+		" All supi HN Sqn sqn_root count #i.
+			Sqn_UE_Invariance(supi, HN, Sqn, sqn_root, count)@i
+				==> (Ex #j. Sqn_Create(supi, HN, sqn_root)@j & j < i) "
+	
+
+	
+	lemma sqn_hss_src [reuse]:
+		" All HN supi Sqn sqn_root count #i.
+			Sqn_HSS_Invariance(HN, supi, Sqn, sqn_root, count)@i
+				==> (Ex #j. Sqn_Create(supi, HN, sqn_root)@j & j < i) "
+	
+
+	
+	lemma sqn_ue_nodecrease [use_induction, reuse]:
+		" (All supi HN Sqni Sqnj #i #j.
+			(Sqn_UE_Change(supi, HN, Sqnj)@j &
+			 Sqn_UE_Change(supi, HN, Sqni)@i &
+			 i < j)	==> (Ex dif. Sqnj = Sqni + dif)) &
+		  (All supi HN Sqni Sqnj #i #j.
+			(Sqn_UE_Change(supi, HN, Sqnj)@j &
+			 Sqn_UE_Nochange(supi, HN, Sqni)@i &
+			 i < j)	==> (Ex dif. Sqnj = Sqni + dif)) &
+		  (All supi HN Sqni Sqnj #i #j.
+			(Sqn_UE_Nochange(supi, HN, Sqnj)@j &
+			 Sqn_UE_Change(supi, HN, Sqni)@i &
+			 i < j)	==> ((Sqnj = Sqni) | (Ex dif. Sqnj = Sqni + dif))) &
+		  (All supi HN Sqni Sqnj #i #j.
+			(Sqn_UE_Nochange(supi, HN, Sqnj)@j &
+			 Sqn_UE_Nochange(supi, HN, Sqni)@i &
+			 i < j)	==> ((Sqnj = Sqni) | (Ex dif. Sqnj = Sqni + dif))) "
+	
+
+	
+	lemma sqn_ue_unique [reuse, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi HN Sqn #i #j.
+			Sqn_UE_Use(supi, HN, Sqn)@i & Sqn_UE_Use(supi, HN, Sqn)@j
+				==> #i = #j "
+	
+
+	
+
+	
+	lemma executability_honest:
+		exists-trace
+		" Ex #i. SEAF_End()@i
+			& not (Ex X data #r. Rev(X,data)@r)
+			& (All supi HN sqn_root #i. Sqn_Create(supi, HN, sqn_root)@i
+					==> not (Ex #j. K(sqn_root)@j))
+			& (All HN1 HN2 #j #k. HomeNet(HN1)@j &
+					      HomeNet(HN2)@k ==> #j = #k)
+			& (All S1 S2 HN1 HN2 #j #k. Subscribe(S1, HN1)@j &
+						    Subscribe(S2, HN2)@k ==> #j = #k)
+			& (All SNID1 SNID2 #j #k. Start_SEAF_Session(SNID1)@j &
+					          Start_SEAF_Session(SNID2)@k ==> #j = #k) 
+			& (All UE1 UE2 #j #k. Start_UE_Session(UE1)@j &
+					          Start_UE_Session(UE2)@k ==> #j = #k) 
+			& (All HN1 HN2 #j #k. Start_HSS_Session(HN1)@j &
+					      Start_HSS_Session(HN2)@k ==> #j = #k)"
+	
+
+	
+
+	
+	lemma executability_keyConf_honest:
+		exists-trace
+		" Ex #i. SEAF_EndConf()@i
+			& not (Ex X data #r. Rev(X,data)@r)
+			& (All supi HN sqn_root #i. Sqn_Create(supi, HN, sqn_root)@i
+					==> not (Ex #j. K(sqn_root)@j))
+			& (All HN1 HN2 #j #k. HomeNet(HN1)@j &
+					      HomeNet(HN2)@k ==> #j = #k)
+			& (All S1 S2 HN1 HN2 #j #k. Subscribe(S1, HN1)@j &
+						    Subscribe(S2, HN2)@k ==> #j = #k)
+			& (All SNID1 SNID2 #j #k. Start_SEAF_Session(SNID1)@j &
+					          Start_SEAF_Session(SNID2)@k ==> #j = #k) 
+			& (All UE1 UE2 #j #k. Start_UE_Session(UE1)@j &
+					          Start_UE_Session(UE2)@k ==> #j = #k) 
+			& (All HN1 HN2 #j #k. Start_HSS_Session(HN1)@j &
+					      Start_HSS_Session(HN2)@k ==> #j = #k)"
+	
+
+	
+	lemma executability_desync:
+		exists-trace
+		" Ex dif #i.
+	                  HSS_Resync_End(dif)@i
+			& not (Ex X data #r. Rev(X,data)@r)
+			& (All supi HN sqn_root #i. Sqn_Create(supi, HN, sqn_root)@i
+					==> not (Ex #j. K(sqn_root)@j))
+			& (All HN1 HN2 #j #k. HomeNet(HN1)@j &
+					      HomeNet(HN2)@k ==> #j = #k)
+			& (All S1 S2 HN1 HN2 #j #k. Subscribe(S1, HN1)@j &
+						    Subscribe(S2, HN2)@k ==> #j = #k)
+			& (All SNID1 SNID2 #j #k. Start_SEAF_Session(SNID1)@j &
+					          Start_SEAF_Session(SNID2)@k ==> #j = #k) 
+			& (All UE1 UE2 #j #k. Start_UE_Session(UE1)@j &
+					          Start_UE_Session(UE2)@k ==> #j = #k) 
+			& (All #j #k. Sqn_UE_Desync()@j & Sqn_UE_Desync()@k ==> #j = #k)
+			& (All HN1 HN2 #j #k. Start_HSS_Session(HN1)@j &
+					      Start_HSS_Session(HN2)@k ==> #j = #k)"
+	
+
+
+	lemma executability_resync:
+		exists-trace
+		" Ex #i1 #i2 #i3 #i4 X.
+			  Start_HSS_Session(X)@i1
+			& HSS_Resync_End('1'+'1'+'1'+'1')@i2
+			& Start_HSS_Session(X)@i3
+			& HSS_End()@i4
+			& #i1 < #i2
+			& #i2 < #i3
+			& #i3 < #i4
+			& not (Ex X data #r. Rev(X,data)@r)
+			& (All #j #k. Sqn_UE_Desync()@j & Sqn_UE_Desync()@k ==> #j = #k)
+			& (All a b #j #k. HSS_Resync_End(a)@j & HSS_Resync_End(b)@k ==> #j = #k)
+			& (All #j #k #l. HSS_Send_Aia()@j &
+					 HSS_Send_Aia()@k &
+					 HSS_Send_Aia()@l &
+					 not #j = #k ==> (#j = #l | #k = #l))
+			& (All #j #k. HSS_End()@j & HSS_End()@k ==> #j = #k)
+			& (All supi HN sqn_root #i. Sqn_Create(supi, HN, sqn_root)@i
+					==> not (Ex #j. KU(sqn_root)@j))
+			& (All HN1 HN2 #j #k. HomeNet(HN1)@j &
+					      HomeNet(HN2)@k ==> #j = #k)
+			& (All SN1 SN2 #j #k. ServNet(SN1)@j &
+					      ServNet(SN2)@k ==> #j = #k)
+			& (All S1 S2 H1 H2 sqn_root1 sqn_root2 #k #j.
+					Sqn_Create(S1, H1, sqn_root1)@j &
+					Sqn_Create(S2, H2, sqn_root2)@k ==> #j = #k)
+			& (All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) 
+			& (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) 
+			& (All SNID1 SNID2 SNID3 #j #k #l. Start_SEAF_Session(SNID1)@j &
+				         Start_SEAF_Session(SNID2)@k &
+				         Start_SEAF_Session(SNID3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l))"
+	
+
+	
+
+	
+
+	
+	lemma weakagreement_ue_seaf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'UE','SEAF',t>)@i
+				==> (Ex t2 #j. Running(b, a, t2)@j)
+				    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	
+
+
+	lemma weakagreement_ue_seaf_keyConf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'UE','SEAF',t>)@i
+				==> (Ex t2 #j. Running(b, a, t2)@j)
+				    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+
+	
+
+	
+	lemma weakagreement_ue_hss_noAsyKeyRev_noSupiRev_noSqnRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src/*, hide_lemma=sqn_ue_nodecrease*/]:
+		" All a b t #i. Commit(a,b,<'UE','HSS',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+	lemma cleanAttack_injectiveagreement_ue_hss_supi_noRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i.
+			( Commit(a,b,<'UE','HSS',<'supi', t>>)@i &
+			 (All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'supi', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'UE','HSS',<'supi', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	lemma noninjectiveagreement_ue_hss_supi_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'UE','HSS',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'supi', t>>)@j)
+	             	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+	lemma noninjectiveagreement_ue_hss_kseaf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'UE','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'K_seaf', t>>)@j)
+	             	    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	lemma noninjectiveagreement_ue_hss_snname_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'UE','HSS',<'snname', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'snname', t>>)@j)
+	             	    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	
+
+	
+	lemma weakagreement_ue_hss_keyConf_noAsyKeyRev_noSupiRev_noSqnRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src/*, hide_lemma=sqn_ue_nodecrease*/]:
+		" All a b t #i. CommitConf(a,b,<'UE','HSS',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+	lemma injectiveagreement_ue_hss_kseaf_keyConf_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'UE','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. CommitConf(a2,b2,<'UE','HSS',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+	lemma noninjectiveagreement_ue_hss_snname_keyConf_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'UE','HSS',<'snname', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'snname', t>>)@j)
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+
+	
+	lemma cleanAttack_injectiveagreement_ue_hss_keyConf_supi_noRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i.
+			(CommitConf(a,b,<'UE','HSS',<'supi', t>>)@i &
+			(All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'supi', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. CommitConf(a2,b2,<'UE','HSS',<'supi', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	lemma noninjectiveagreement_ue_hss_keyConf_supi_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'UE','HSS',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'UE','HSS',<'supi', t>>)@j)
+	             	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+
+	
+	lemma noninjectiveagreement_seaf_ue_kseaf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','UE',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','UE',<'K_seaf', t>>)@j)
+	             	    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	lemma cleanAttack_injectiveagreement_seaf_ue_supi_noRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. 
+			(Commit(a,b,<'SEAF','UE',<'supi', t>>)@i &
+			(All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+	    		==> (Ex #j. Running(b,a,<'SEAF','UE',<'supi', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'SEAF','UE',<'supi', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_ue_supi_noKeyRev_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','UE',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','UE',<'supi', t>>)@j)
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)  "
+	
+
+	lemma weakagreement_seaf_ue_noKeyRev_noAsyKeyRev_noSupiRev_noSqnRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma weakagreement_seaf_ue_noAsyKeyRev_noSupiRev_noSqnRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma weakagreement_seaf_ue_noKeyRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	
+
+	
+	
+
+	// attack (stored)
+	lemma noninjectiveagreement_seaf_ue_kseaf_keyConf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','UE',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','UE',<'K_seaf', t>>)@j)
+	             	    | (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_ue_keyConf_supi_noKeyRev_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','UE',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','UE',<'supi', t>>)@j)
+	             	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma weakagreement_seaf_ue_KeyConf_noKeyRev_noAsyKeyRev_noSupiRev_noSqnRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma weakagreement_seaf_ue_KeyConf_noKeyRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma weakagreement_seaf_ue_KeyConf_noAsyKeyRev_noSupiRev_noSqnRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+
+	
+	
+	
+
+	// attack (automatic) (~10 sec)
+	lemma weakagreement_seaf_hss_noAsyKeyRev_noSupiRev_noSqnRev_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'SEAF','HSS',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_hss_kseaf_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma injectiveagreement_seaf_hss_kseaf_noChanRev_noSqnRev_noSupiRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'SEAF','HSS',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i))) 
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma injectiveagreement_seaf_hss_kseaf_noKeyRev_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'SEAF','HSS',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_hss_supi_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'SEAF','HSS',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'supi', t>>)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	
+	
+
+	// attack (automatic) (~30 sec)
+	lemma weakagreement_seaf_hss_keyConf_noAsyKeyRev_noSupiRev_noSqnRev_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','HSS',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_hss_kseaf_keyConf_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma injectiveagreement_seaf_hss_kseaf_keyConf_noChanRev_noSqnRev_noSupiRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. CommitConf(a2,b2,<'SEAF','HSS',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i))) 
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 min)
+	lemma injectiveagreement_seaf_hss_kseaf_keyConf_noKeyRev_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','HSS',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. CommitConf(a2,b2,<'SEAF','HSS',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_seaf_hss_keyConf_supi_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. CommitConf(a,b,<'SEAF','HSS',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'SEAF','HSS',<'supi', t>>)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	
+
+	
+	
+
+	// proof (automatic) (~1 min)
+	lemma injectiveagreement_hss_ue_kseaf_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'HSS','UE',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'HSS','UE',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'HSS','UE',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i)))
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma weakagreement_hss_ue_noAsyKeyRev_noSupiRev_noSqnRev_noChanRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'HSS','UE',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~10 sec)
+	lemma noninjectiveagreement_hss_ue_supi_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'HSS','UE',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'HSS','UE',<'supi', t>>)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma noninjectiveagreement_hss_ue_snname_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'HSS','UE',<'snname', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'HSS','UE',<'snname', t>>)@j)
+	             	| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+	
+
+	// proof (automatic) (~1 sec)
+	lemma injectiveagreement_hss_seaf_kseaf_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'HSS','SEAF',<'K_seaf', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'HSS','SEAF',<'K_seaf', t>>)@j 
+	        	     & j < i
+	        	     & not (Ex a2 b2 #i2. Commit(a2,b2,<'HSS','SEAF',<'K_seaf', t>>)@i2
+	                           	& not (#i2 = #i))) 
+			| (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma weakagreement_hss_seaf_noAsyKeyRev_noSupiRev_noSqnRev_noKeyRev [hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src, hide_lemma=sqn_ue_nodecrease]:
+		" All a b t #i. Commit(a,b,<'HSS','SEAF',t>)@i
+			==> (Ex t2 #j. Running(b,a, t2)@j)
+			| (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i)
+			| (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			| (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	| (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma noninjectiveagreement_hss_seaf_supi_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All a b t #i. Commit(a,b,<'HSS','SEAF',<'supi', t>>)@i
+	    		==> (Ex #j. Running(b,a,<'HSS','SEAF',<'supi', t>>)@j)
+			| (Ex X data #r. Rev(X,data)@r & Honest(X)@i) "
+	
+
+	
+	lemma cleanAttack_secrecy_ue_supi_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i.
+			(Secret(<'UE', supi>, 'supi', t)@i &
+			 (All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X data #r. Rev(X, data)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_ue_supi_noChanRevAtAll_noSupiRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_ue_supi_noChanRevAtAll_noSupiRev_noKeyRev_noSqnRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+	
+
+	// attack (stored)
+	lemma cleanAttack_secrecy_ue_supi_keyConf_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i.
+			(SecretConf(<'UE', supi>, 'supi', t)@i & 
+			(All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X data #r. Rev(X, data)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_ue_kseaf_noKeyRev_noChanRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_ue_kseaf_noChanRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+			    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i)
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_ue_kseaf_noKeyRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_ue_k_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'UE', supi>, 'k', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+	
+
+	// attack (stored)
+	lemma secrecy_hss_kseaf_noKeyRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All HNid t #i. Secret(<'HSS', HNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_hss_kseaf_noChanRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All HNid t #i. Secret(<'HSS', HNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) 
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_hss_kseaf_noChanRev_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All HNid t #i. Secret(<'HSS', HNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) 
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+	
+
+	// attack (stored)
+	lemma cleanAttack_secrecy_hss_supi_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All HNid t #i.
+			(Secret(<'HSS', HNid>, 'supi', t)@i &
+			(All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X data #r. Rev(X, data)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_hss_supi_noChanRevAtAll_noSupiRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'HSS', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_hss_supi_noChanRevAtAll_noSupiRev_noKeyRev_noSqnRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'HSS', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_hss_k_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'HSS', supi>, 'k', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_seaf_kseaf_noChanRev_noKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All SNid t #i. Secret(<'SEAF', SNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) 
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_seaf_kseaf_noChanRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All SNid t #i. Secret(<'SEAF', SNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r & Honest(X)@i) 
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_seaf_kseaf_noKeyRev_noSupiRev_noSqnRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All SNid t #i. Secret(<'SEAF', SNid>, 'key', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+	lemma cleanAttack_secrecy_seaf_supi_noRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All SNid t #i. 
+			(Secret(<'SEAF', SNid>, 'supi', t)@i &
+			(All UE1 UE2 UE3 #j #k #l. Start_UE_Session(UE1)@j &
+				         Start_UE_Session(UE2)@k &
+				         Start_UE_Session(UE3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)) &
+			 (All HN1 HN2 HN3 #j #k #l. Start_HSS_Session(HN1)@j &
+				         Start_HSS_Session(HN2)@k &
+				         Start_HSS_Session(HN3)@l &
+					 not #j = #k ==> (#j = #l | #k = #l)))
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X data #r. Rev(X, data)@r & Honest(X)@i) "
+	
+
+	
+
+	// proof (automatic) (~1 sec)
+	lemma secrecy_seaf_supi_noChanRevAtAll_noSupiRev_noAsyKeyRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'SEAF', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X k #r. Rev(X, <'skHN',k>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	// attack (stored)
+	lemma secrecy_seaf_supi_noChanRevAtAll_noSupiRev_noKeyRev_noSqnRev [hide_lemma=sqn_ue_nodecrease, hide_lemma=sqn_ue_src, hide_lemma=sqn_hss_src]:
+		" All supi t #i. Secret(<'SEAF', supi>, 'supi', t)@i
+			==> not (Ex #j. K(t)@j)
+	        	    | (Ex X #r. Rev(X, 'secureChannel')@r)
+			    | (Ex X key #r. Rev(X, <'k',key>)@r & Honest(X)@i) 
+			    | (Ex X s #r. Rev(X, <'sqn',s>)@r & Honest(X)@i)
+	           	    | (Ex X s #r. Rev(X, <'supi',s>)@r & Honest(X)@i) "
+	
+
+	
+
+	
+
+	end
+
