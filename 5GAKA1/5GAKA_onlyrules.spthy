@@ -1,0 +1,298 @@
+/*
+ *  Author: 
+ *  Model Name: 
+ *  Status: DEVELOPMENTAL
+ *
+ *  Comments: This does not have any action facts or lemmas in it 
+ */
+
+theory 5G_AKA_onlyrules
+begin
+
+builtins: asymmetric-encryption, multiset, xor
+functions: f1/2,  //mac
+f2/2,           //RES
+f3/2,             //CK
+f4/2,            //IK
+f5/2,           //AK
+f1_star/2,        //MAC-S
+f5_star/2,     //AKS
+KDF/2,         //Kausf,Kseaf
+
+/************************************/
+/*    Channel: SEAF .<->. HSS       */
+/************************************/
+
+
+/////to be updated later
+
+
+///Rules
+
+rule servnet:                          ///Initialization
+  let
+     SNID = <'5G', ~SNid>
+  in
+    [Fr(~SNid)  ]
+  --[  ]->
+    [ !SEAF(~SNid,SNID), Out(SNID) ]
+
+
+rule homenet:                               //Initialization
+      let
+        
+      in
+        [ Fr(~seck_HN),
+	  Fr(~HNid) ]
+      --[  ]->
+        [ !HSS(~HNid, ~seck_HN),
+	 !Pk(~HNid, pk(~seck_HN)),
+	 Out(<~HNid, pk(~seck_HN)>) ]    
+
+
+rule Subscription:                                  ///Initialization
+  let
+    
+  in
+    [ [Fr(~supi),
+	 Fr(~k),
+	 Fr(~sqn_root),
+	 !HSS(~HNid, ~seck_HN)]  ]
+  --[  ]->
+    [ !Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+	 Sqn_UE(~supi, ~HNid, ~sqn_root+'1', ~sqn_root, '1'),
+	 Sqn_HSS(~supi, ~HNid, ~sqn_root+'1', ~sqn_root, '1')]
+ 
+
+ rule compromise_Ltk_Sym:                                    //compromise sub sym_key 
+	[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+	--[ ]->
+	[Out(~k)
+
+rule reveal_Ltk_Sqn:                                                   //compromise sub initial sqn_root
+	[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+	--[ ]->
+	[Out(~sqn_root)]
+
+rule reveal_Ltk_supi:                                                  //compromise sub supi
+	[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root)]
+	--[ ]->
+	[Out(~supi)]
+
+rule reveal_sk_HN:                            //compromise HN 
+	[!HSS(~idHN, ~seck_HN)] 
+	--[	]->
+	[Out(~seck_HN)]
+
+/*********************/
+/*   Sync. Failure  */
+
+	///to be updated later
+
+
+
+rule ue_send_attachReq:
+	let
+		suci = < aenc{<~supi, ~R>}pk_HN, ~HNid>
+		msg = suci
+	in
+	[!Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+	 !Pk(~HNid, pk_HN),
+	 Fr(~R),
+	 Fr(~tid)]
+	--[	]->
+	[St_1_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root),
+	 Out(msg)]
+
+
+let
+		suci = <conc_supi,  HNid>
+		msg = <suci, SNID >
+
+	in
+	[!SEAF(~SNid, SNID),
+	 Fr(~tid),
+	 In(suci)]
+	--[ ]->
+	[St_1_SEAF(~tid, ~SNid, SNID, conc_supi, HNid),
+	 SndS(~SNid, HNid, <'air', msg>)]
+
+
+rule hss_receive_air_send_aia:
+	let
+	        
+		conc_supi = aenc{<~supi, ~R>}pk(~seck_HN)
+		suci = <conc_supi, ~HNid>
+		SNID = <'5G', SNid> 
+		msgIn = <suci, SNID >
+		SqnNext = SqnHSS + '1'
+		
+	
+		MAC = f1(~k, <SqnNext, ~RAND>)
+	 	XRES = f2(~k, ~RAND)
+		CK = f3(~k, ~RAND)
+		IK = f4(~k, ~RAND)
+		AK = f5(~k, ~RAND)
+		AUTN = <SqnNext XOR AK, MAC>
+		K_seaf = KDF(KDF(<CK, IK>, <SNID, SqnNext XOR AK>), SNID)
+		XRES_star = KDF(<CK, IK>, <SNID, XRES, ~RAND>)
+
+	
+                HXRES_star = SHA256(XRES_star, ~RAND)
+		5G_AV = < ~RAND, HXRES_star, K_seaf, AUTN >
+
+		msgOut = 5G_AV
+        in
+	[!HSS(~HNid, ~seck_HN),
+	 RcvS(SNid, ~HNid, <'air', msgIn>),
+	 !Ltk_Sym(~supi, ~HNid, ~k, ~sqn_root),
+	 Sqn_HSS(~supi, ~HNid, SqnHSS, ~sqn_root, count),
+	 Fr(~RAND),
+	 Fr(~tid),
+	 In(count)]
+	--[ ]->
+	[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, SqnNext, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+         Sqn_HSS(~supi, ~HNid, SqnNext, ~sqn_root, count+'1'),
+         SndS(~HNid, SNid, <'aia', msgOut>)]
+
+
+rule seaf_receive_aia_send_authReq:
+	let
+		5G_AV = < RAND, HXRES_star, K_seaf, AUTN >
+		msgIn = 5G_AV
+                msgOut = < RAND, AUTN, SNID >
+        in
+	[St_1_SEAF(~tid, ~SNid, SNID, conc_supi, HNid),
+	 RcvS(HNid, ~SNid, <'aia', msgIn>)]
+	--[	]->
+	[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf)
+	, Out(msgOut)]
+
+
+	rule ue_receive_authReq_freshness_success_send_authResp:
+	let
+		
+		SqnHSS = SqnUE + dif 
+		AK = f5(~k, RAND)
+		MAC = f1(~k, <SqnHSS, RAND>) 
+                AUTN = <SqnHSS XOR AK, MAC>
+		SNID = <'5G', SNid>
+		msgIn = < RAND, AUTN, SNID >
+		// Output
+		RES = f2(~k, RAND)
+		IK = f4(~k, RAND)
+		CK = f3(~k, RAND)
+		RES_star = KDF(<CK, IK>, <SNID, RES, RAND>)
+		K_seaf = KDF(KDF(<CK, IK>, <SNID, SqnHSS XOR AK>), SNID)
+		msgOut = RES_star
+	in
+	[St_1_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root),
+	 Sqn_UE(~supi, ~HNid, SqnUE, ~sqn_root, count),
+	 In(msgIn)]
+	--[	]->
+	[St_2_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root, SNid, K_seaf),
+	 Out(msgOut),
+	 Sqn_UE(~supi, ~HNid, SqnHSS, ~sqn_root, count+dif)]
+
+
+rule ue_receive_authReq_fail_freshness_send_sync_failure:
+	let
+		
+		AK = f5(~k, RAND)
+		MAC = f1(~k, <SqnHSS, RAND>) 
+                AUTN = <SqnHSS XOR AK, MAC>
+		SNID = <'5G', idSN>
+		msgIn = < RAND, AUTN, SNID >
+		
+		AKS = f5_star(~k, RAND)
+		MACS = f1_star(~k, <SqnUE, RAND>)
+		AUTS = <SqnUE XOR AKS, MACS >
+		out_msg = AUTS
+	in
+	[St_1_UE(~tid, ~supi, ~idHN, ~k, ~sqn_root),
+	 Sqn_UE(~supi, ~idHN, SqnUE, ~sqn_root, count),
+	 In(msgIn),
+	 In(count)]		
+	--[ ]->
+	[Out(out_msg),
+	 Sqn_UE(~supi, ~HNid, SqnUE, ~sqn_root, count)]
+
+rule seaf_receive_authResp_send_ac:
+    let
+		HXRES_star = SHA256(RES_star, RAND)
+		suci = <conc_supi,  HNid>
+		msgOut = < RES_star, suci, SNID >
+	in
+	[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf),
+	 In(RES_star)]
+	--[	]->
+	[St_3_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, RES_star, K_seaf),
+	SndS(~SNid, HNid, <'ac', msgOut>)]
+
+rule seaf_receive_syncFailure_send_authSync:
+	let
+		AUTS = < SqnUEXorAKS, MACS >
+		out_msg = < RAND, AUTS >
+	in
+	[St_2_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, RAND, HXRES_star, K_seaf),
+	 In(AUTS)]
+	-->
+	[SndS(~SNid, HNid, <'resync', out_msg>)]
+
+
+rule hss_receive_ac_send_aca:
+	let
+		SNID = <'5G', idSN>
+		CK = f3(~k, ~RAND)
+		IK = f4(~k, ~RAND)
+		AK = f5(~k, ~RAND)
+		K_seaf = KDF(KDF(<CK, IK>, <SNID, Sqn XOR AK>), SNID)
+		msgIn = < XRES_star, suci, SNID >
+
+		msgOut = <'confirm', ~supi>
+	in
+	[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, Sqn, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+	 RcvS(SNid, ~HNid, <'ac',msgIn>)]
+	--[ ]->
+	[SndS(~HNid, SNid, <'aca', msgOut>)]
+
+
+rule seaf_receive_aca:
+        let
+		SNID = <'5G', ~SNid>
+		msgIn = <'confirm', supi>
+	in
+        [St_3_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf),
+	 RcvS(HNid, ~SNid, <'aca', msgIn>)]
+	--[	]->
+	[St_4_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf,supi),
+	 Out(f1(K_seaf, 'SEAF'))]
+
+
+rule hss_receive_authSync:
+	let
+		SqnUE = dif + SqnHSS // check that SqnUE > SqnHSS
+		AKS = f5_star(~k, ~RAND)
+		MACS = f1_star(~k, <SqnUE, ~RAND>)
+		AUTS = <SqnUE XOR AKS, MACS >
+		msg = < ~RAND, AUTS >
+
+	in
+	[St_1_HSS(~tid, ~HNid, ~supi, suci, SNid, SNID, ~k, SqnHSS, XRES_star, ~RAND, ~sqn_root, ~seck_HN),
+	 Sqn_HSS(~supi, ~HNid, SqnHSS, ~sqn_root, count),
+	 RcvS(SNid, ~HNid, <'resync', msg>),
+	 In(count+dif)]
+	--[	]->
+	[Sqn_HSS(~supi, ~HNid, SqnUE, ~sqn_root, count+dif)]
+
+rule ue_key_confirmation:
+        [St_2_UE(~tid, ~supi, ~HNid, ~k, ~sqn_root, SNid, K_seaf),
+	 In(f1(K_seaf, 'SEAF'))]
+        --[	]->
+	[Out(f1(K_seaf, 'UE'))]
+
+rule seaf_key_confirmation_check:
+       	[St_4_SEAF(~tid, ~SNid, SNID, conc_supi, HNid, ~RAND, RES_star, K_seaf,supi),
+	 In(f1(K_seaf, 'UE'))]
+        --[ ]->
+	[]
